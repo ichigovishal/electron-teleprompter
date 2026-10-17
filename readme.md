@@ -2,7 +2,7 @@
 
 Desktop teleprompter app built with [Electron.js](https://www.electronjs.org/).
 
-> **Note:** This is a modified fork of [Electron Teleprompter](https://github.com/reverentgeek/electron-teleprompter), originally created by [David Neal](https://github.com/reverentgeek) and used here under the MIT License. This fork replaces the Deepgram cloud speech service with a fully offline [faster-whisper](https://github.com/SYSTRAN/faster-whisper) service and adds a settable auto-scroll start point. All credit for the original application belongs to David Neal.
+> **Note:** This is a modified fork of [Electron Teleprompter v4.1.14](https://github.com/reverentgeek/electron-teleprompter), originally created by [David Neal](https://github.com/reverentgeek) and used here under the MIT License. This fork replaces the Deepgram cloud speech service with a fully offline [faster-whisper](https://github.com/SYSTRAN/faster-whisper) service and adds a settable auto-scroll start point. All credit for the original application belongs to David Neal.
 
 ## Features
 
@@ -157,5 +157,5 @@ This app was originally built "in the open" on the [All Hands on Tech Live](http
 
 ## Credits
 
-Electron Teleprompter was created by [David Neal](https://github.com/reverentgeek) and is available at [reverentgeek/electron-teleprompter](https://github.com/reverentgeek/electron-teleprompter) under the MIT License. This fork builds on his work — thanks, David!
+Electron Teleprompter was created by [David Neal](https://github.com/reverentgeek) and is available at [reverentgeek/electron-teleprompter](https://github.com/reverentgeek/electron-teleprompter) under the MIT License. This fork is based on **v4.1.14**; upstream has since released newer versions. Thanks, David!
 
