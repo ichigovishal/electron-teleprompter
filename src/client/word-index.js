@@ -4,6 +4,10 @@
 
 const NORMALIZE_REGEX = /[^\w']/g;
 
+// Fraction of the viewport height where the "current" word sits while
+// auto-scrolling (and therefore where the start point is captured from).
+export const READING_ANCHOR_RATIO = 0.33;
+
 function normalize( word ) {
 	return word.toLowerCase().replace( NORMALIZE_REGEX, "" );
 }
@@ -30,6 +34,28 @@ export function buildWordIndex( rootEl ) {
 		}
 	}
 	return { words, ranges };
+}
+
+// Find the index of the word closest to the reading anchor line
+// (`anchorRatio` of the viewport height down from the top). Used to capture
+// the current reading position as an auto-scroll start point. Ranges are in
+// document order, so we can stop as soon as we pass the anchor.
+export function indexAtAnchor( ranges, anchorRatio = READING_ANCHOR_RATIO ) {
+	if ( !ranges || !ranges.length ) return 0;
+	const anchorY = window.innerHeight * anchorRatio;
+	let bestIndex = 0;
+	let bestDist = Infinity;
+	for ( let i = 0; i < ranges.length; i++ ) {
+		const rect = ranges[i].getBoundingClientRect();
+		if ( rect.width === 0 && rect.height === 0 ) continue;
+		const dist = Math.abs( rect.top - anchorY );
+		if ( dist < bestDist ) {
+			bestDist = dist;
+			bestIndex = i;
+		}
+		if ( rect.top > anchorY && bestDist < Infinity ) break;
+	}
+	return bestIndex;
 }
 
 // Smooth scroll using a critically-damped spring (Unity-style SmoothDamp).
@@ -115,7 +141,7 @@ export function scrollToWord( index, ranges, opts = {} ) {
 	const range = ranges[index];
 	const rect = range.getBoundingClientRect();
 	if ( rect.width === 0 && rect.height === 0 ) return;
-	const verticalAnchor = opts.verticalAnchor ?? 0.33;
+	const verticalAnchor = opts.verticalAnchor ?? READING_ANCHOR_RATIO;
 	const targetY = Math.max( 0, window.scrollY + rect.top - window.innerHeight * verticalAnchor );
 	if ( opts.smooth === false ) {
 		scrollTargetY = null;

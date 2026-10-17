@@ -83,6 +83,7 @@ export function createAligner( scriptWords ) {
 
 	function setPosition( idx ) {
 		position = Math.max( 0, Math.min( scriptWords.length - 1, idx ) );
+		recent.length = 0;
 	}
 
 	function reset() {

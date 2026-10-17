@@ -54,6 +54,8 @@ a { color: #ffffffcc; }
 	-webkit-app-region: no-drag;
 	z-index: 1000;
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+	white-space: pre-line;
+	line-height: 1.35;
 }
 
 #auto-scroll-indicator.connecting {
@@ -67,6 +69,18 @@ a { color: #ffffffcc; }
 
 #auto-scroll-indicator::before {
 	content: "● ";
+}
+
+#auto-scroll-anchor-line {
+	position: fixed;
+	left: 0;
+	right: 0;
+	top: 33%;
+	height: 0;
+	border-top: 2px dashed rgba(40, 167, 69, 0.9);
+	pointer-events: none;
+	-webkit-app-region: no-drag;
+	z-index: 999;
 }
 
 .modal {

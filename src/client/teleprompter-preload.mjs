@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld( "electron", {
 	resizeWindow: ( width, height ) => ipcRenderer.send( "resizeWindow", width, height ),
 
 	// Editor IPC
+	openFile: () => ipcRenderer.send( "menuOpen" ),
 	requestRawMarkdown: () => ipcRenderer.send( "requestRawMarkdown" ),
 	onRawMarkdown: callback => ipcRenderer.on( "rawMarkdown", ( _event, content, filePath ) => callback( content, filePath ) ),
 	saveFile: content => ipcRenderer.send( "saveFile", content ),
@@ -30,16 +31,9 @@ contextBridge.exposeInMainWorld( "electron", {
 	previewMarkdown: markdown => ipcRenderer.send( "previewMarkdown", markdown ),
 	reloadContent: () => ipcRenderer.send( "reloadContent" ),
 
-	// Auto-scroll IPC
-	getDeepgramKey: () => ipcRenderer.send( "getDeepgramKey" ),
-	setDeepgramKey: key => ipcRenderer.send( "setDeepgramKey", key ),
-	onDeepgramKey: callback => ipcRenderer.on( "deepgramKey", ( _event, payload ) => callback( payload ) ),
-	onDeepgramKeySaved: callback => ipcRenderer.on( "deepgramKeySaved", ( _event, payload ) => callback( payload ) ),
+	// Auto-scroll IPC (local faster-whisper daemon)
 	onToggleAutoScroll: callback => ipcRenderer.on( "toggleAutoScroll", () => callback() ),
-	onMenuSetDeepgramKey: callback => ipcRenderer.on( "menuSetDeepgramKey", () => callback() ),
-	onMenuAdjustAutoScrollSpeed: callback => ipcRenderer.on( "menuAdjustAutoScrollSpeed", ( _event, action ) => callback( action ) ),
-	getAudioDeviceId: () => ipcRenderer.send( "getAudioDeviceId" ),
-	setAudioDeviceId: deviceId => ipcRenderer.send( "setAudioDeviceId", deviceId ),
-	onAudioDeviceId: callback => ipcRenderer.on( "audioDeviceId", ( _event, payload ) => callback( payload ) ),
-	onMenuSelectMicrophone: callback => ipcRenderer.on( "menuSelectMicrophone", () => callback() )
+	onMenuSetAutoScrollStart: callback => ipcRenderer.on( "menuSetAutoScrollStart", () => callback() ),
+	onMenuClearAutoScrollStart: callback => ipcRenderer.on( "menuClearAutoScrollStart", () => callback() ),
+	onMenuAdjustAutoScrollSpeed: callback => ipcRenderer.on( "menuAdjustAutoScrollSpeed", ( _event, action ) => callback( action ) )
 } );

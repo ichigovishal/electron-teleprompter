@@ -2,6 +2,7 @@ import {
 	startAutoScroll,
 	stopAutoScroll,
 	scrollToWord,
+	setAutoScrollPosition,
 	cancelScroll,
 	setScrollSpeed,
 	SCROLL_SPEED_MIN,
@@ -9,6 +10,7 @@ import {
 	SCROLL_SPEED_DEFAULT,
 	SCROLL_SPEED_STEP
 } from "./auto-scroll.js";
+import { buildWordIndex, indexAtAnchor, READING_ANCHOR_RATIO } from "./word-index.js";
 
 let scriptIndex = 0;
 const md = document.getElementById( "md" );
@@ -83,33 +85,31 @@ const editorContainer = document.getElementById( "editor-container" );
 const editorDiv = document.getElementById( "editor" );
 const toolbarFilename = document.getElementById( "toolbar-filename" );
 const toolbarDirty = document.getElementById( "toolbar-dirty" );
+const btnOpen = document.getElementById( "btn-open" );
 const btnSave = document.getElementById( "btn-save" );
 const btnSaveAs = document.getElementById( "btn-save-as" );
 const btnCancel = document.getElementById( "btn-cancel" );
 const resizeHandle = document.getElementById( "resize-handle" );
 const autoScrollIndicator = document.getElementById( "auto-scroll-indicator" );
-const apiKeyModal = document.getElementById( "api-key-modal" );
-const apiKeyInput = document.getElementById( "api-key-input" );
-const apiKeySaveBtn = document.getElementById( "api-key-save" );
-const apiKeyCancelBtn = document.getElementById( "api-key-cancel" );
-const apiKeyClearBtn = document.getElementById( "api-key-clear" );
-const micModal = document.getElementById( "mic-modal" );
-const micSelect = document.getElementById( "mic-modal-select" );
-const micHint = document.getElementById( "mic-modal-hint" );
-const micSaveBtn = document.getElementById( "mic-modal-save" );
-const micCancelBtn = document.getElementById( "mic-modal-cancel" );
+const autoScrollAnchorLine = document.getElementById( "auto-scroll-anchor-line" );
 
 // --- Auto-scroll state ---
 let autoScrollActive = false;
 let autoScrollStarting = false;
-let pendingDeepgramKey = null;
-let pendingStartAfterKeySave = false;
 let lastManualScrollTs = 0;
 let autoScrollSpeed = SCROLL_SPEED_DEFAULT;
-let audioDeviceId = null;
 let speedHintTimer = null;
+// Word index the next auto-scroll session should begin from (0 = top of script).
+let autoScrollStartIndex = 0;
+let anchorLineTimer = null;
 const MANUAL_SCROLL_GRACE_MS = 3000;
 const SPEED_HINT_MS = 1500;
+const ANCHOR_LINE_MS = 2500;
+
+// Align the guide line with the reading anchor used when scrolling.
+if ( autoScrollAnchorLine ) {
+	autoScrollAnchorLine.style.top = `${ READING_ANCHOR_RATIO * 100 }%`;
+}
 
 // Track manual scrolling in preview mode
 let ignoreNextScroll = false;
@@ -328,6 +328,9 @@ window.electron.onRequestSaveBeforeClose( () => {
 } );
 
 // Toolbar buttons
+if ( btnOpen ) {
+	btnOpen.addEventListener( "click", () => window.electron.openFile() );
+}
 if ( btnSave ) {
 	btnSave.addEventListener( "click", saveEditorContent );
 }
@@ -422,6 +425,9 @@ if ( resizeHandle ) {
 window.electron.onContent( ( content ) => {
 	if ( md ) {
 		md.innerHTML = content;
+		// New HTML invalidates the word index, so drop any captured start point.
+		autoScrollStartIndex = 0;
+		if ( autoScrollAnchorLine ) autoScrollAnchorLine.classList.add( "hidden" );
 		if ( pendingScrollToCursor ) {
 			pendingScrollToCursor = false;
 			requestAnimationFrame( () => scrollPreviewToCursorLine() );
@@ -466,6 +472,47 @@ function handleAutoScrollPosition( wordIdx, ranges ) {
 	scrollToWord( wordIdx, ranges );
 }
 
+// Briefly reveal the reading-anchor guide so the user can see where the
+// captured start point landed.
+function flashAnchorLine() {
+	if ( !autoScrollAnchorLine ) return;
+	autoScrollAnchorLine.classList.remove( "hidden" );
+	if ( anchorLineTimer ) clearTimeout( anchorLineTimer );
+	anchorLineTimer = setTimeout( () => {
+		anchorLineTimer = null;
+		autoScrollAnchorLine.classList.add( "hidden" );
+	}, ANCHOR_LINE_MS );
+}
+
+// Capture the word currently sitting on the reading anchor as the point where
+// the next auto-scroll session should begin.
+function setAutoScrollStartHere() {
+	if ( isEditMode ) {
+		alert( "Exit the editor before setting the auto-scroll start point." );
+		return;
+	}
+	if ( !md ) return;
+	const { ranges } = buildWordIndex( md );
+	const idx = indexAtAnchor( ranges );
+	autoScrollStartIndex = idx;
+	// Snap the marked word onto the anchor so the viewport and the aligner
+	// agree about where "here" is when the session starts.
+	scrollToWord( idx, ranges, { smooth: false } );
+	flashAnchorLine();
+	if ( autoScrollActive ) {
+		setAutoScrollPosition( idx );
+		showTransientHint( "Start point moved" );
+	} else {
+		showTransientHint( "Start point set" );
+	}
+}
+
+function clearAutoScrollStart() {
+	autoScrollStartIndex = 0;
+	if ( autoScrollAnchorLine ) autoScrollAnchorLine.classList.add( "hidden" );
+	showTransientHint( "Start point cleared" );
+}
+
 async function startAutoScrollSession() {
 	if ( autoScrollActive || autoScrollStarting ) return;
 	if ( isEditMode ) {
@@ -473,34 +520,16 @@ async function startAutoScrollSession() {
 		return;
 	}
 	autoScrollStarting = true;
-	pendingDeepgramKey = null;
 	setIndicator( "Connecting…", "connecting" );
-	window.electron.getDeepgramKey();
-}
-
-async function tryStartFlow() {
-	if ( !autoScrollStarting || !pendingDeepgramKey ) return;
-	const dgKey = pendingDeepgramKey;
-	pendingDeepgramKey = null;
-
-	if ( !dgKey.key ) {
-		autoScrollStarting = false;
-		setIndicator( null );
-		pendingStartAfterKeySave = true;
-		showApiKeyModal();
-		return;
-	}
-
 	try {
 		await startAutoScroll( {
-			deepgramKey: dgKey.key,
 			scriptEl: md,
-			audioDeviceId,
+			startIndex: autoScrollStartIndex,
 			onStatus: ( status ) => {
 				if ( status.type === "closed" || status.type === "error" ) {
 					if ( autoScrollActive ) stopAutoScrollSession();
-				} else if ( status.type === "device-fallback" ) {
-					showTransientHint( "Saved mic unavailable — using default", 2500 );
+				} else if ( status.type === "model" && autoScrollActive ) {
+					setIndicator( `STT ${ status.model || "unknown" }\nListening` );
 				}
 			},
 			onScroll: handleAutoScrollPosition
@@ -547,71 +576,8 @@ if ( autoScrollIndicator ) {
 }
 
 window.electron.onToggleAutoScroll( toggleAutoScrollSession );
-window.electron.onDeepgramKey( ( payload ) => {
-	pendingDeepgramKey = payload;
-	tryStartFlow();
-} );
-
-// --- API key modal ---
-
-function showApiKeyModal() {
-	if ( !apiKeyModal ) return;
-	apiKeyInput.value = "";
-	apiKeyModal.classList.remove( "hidden" );
-	setTimeout( () => apiKeyInput.focus(), 0 );
-}
-
-function hideApiKeyModal() {
-	if ( !apiKeyModal ) return;
-	apiKeyModal.classList.add( "hidden" );
-	apiKeyInput.value = "";
-}
-
-if ( apiKeySaveBtn ) {
-	apiKeySaveBtn.addEventListener( "click", () => {
-		const value = apiKeyInput.value.trim();
-		if ( !value ) return;
-		window.electron.setDeepgramKey( value );
-		hideApiKeyModal();
-	} );
-}
-
-if ( apiKeyCancelBtn ) {
-	apiKeyCancelBtn.addEventListener( "click", () => {
-		pendingStartAfterKeySave = false;
-		hideApiKeyModal();
-	} );
-}
-
-if ( apiKeyClearBtn ) {
-	apiKeyClearBtn.addEventListener( "click", () => {
-		pendingStartAfterKeySave = false;
-		window.electron.setDeepgramKey( "" );
-		hideApiKeyModal();
-	} );
-}
-
-if ( apiKeyInput ) {
-	apiKeyInput.addEventListener( "keydown", ( e ) => {
-		if ( e.key === "Enter" ) {
-			apiKeySaveBtn?.click();
-		} else if ( e.key === "Escape" ) {
-			apiKeyCancelBtn?.click();
-		}
-	} );
-}
-
-window.electron.onMenuSetDeepgramKey( () => {
-	pendingStartAfterKeySave = false;
-	showApiKeyModal();
-} );
-
-window.electron.onDeepgramKeySaved( ( payload ) => {
-	if ( pendingStartAfterKeySave && payload.hasKey ) {
-		pendingStartAfterKeySave = false;
-		startAutoScrollSession();
-	}
-} );
+window.electron.onMenuSetAutoScrollStart( setAutoScrollStartHere );
+window.electron.onMenuClearAutoScrollStart( clearAutoScrollStart );
 
 // --- Auto-scroll speed control ---
 
@@ -664,92 +630,3 @@ window.electron.onAutoScrollSpeed( ( value ) => {
 } );
 
 window.electron.onMenuAdjustAutoScrollSpeed( adjustAutoScrollSpeed );
-
-// --- Microphone selection ---
-
-async function populateMicSelect() {
-	if ( !micSelect ) return;
-	let devices = [];
-	try {
-		devices = await navigator.mediaDevices.enumerateDevices();
-	} catch ( err ) {
-		console.warn( "[mic] enumerateDevices failed", err );
-	}
-	const inputs = devices.filter( d => d.kind === "audioinput" );
-	micSelect.innerHTML = "";
-
-	const defaultOpt = document.createElement( "option" );
-	defaultOpt.value = "";
-	defaultOpt.textContent = "System default";
-	micSelect.appendChild( defaultOpt );
-
-	let hasLabels = false;
-	let matchedSelection = false;
-	for ( const d of inputs ) {
-		const opt = document.createElement( "option" );
-		opt.value = d.deviceId;
-		opt.textContent = d.label || `Microphone (${ d.deviceId.slice( 0, 6 ) }…)`;
-		if ( d.label ) hasLabels = true;
-		if ( d.deviceId === audioDeviceId ) {
-			opt.selected = true;
-			matchedSelection = true;
-		}
-		micSelect.appendChild( opt );
-	}
-	if ( !matchedSelection ) {
-		defaultOpt.selected = true;
-	}
-
-	if ( inputs.length === 0 ) {
-		micHint.textContent = "No microphones detected.";
-	} else if ( !hasLabels ) {
-		micHint.textContent = "Start auto-scroll once and grant mic access to see device names.";
-	} else {
-		micHint.textContent = "Used by auto-scroll for speech recognition. Takes effect next time auto-scroll starts.";
-	}
-}
-
-function showMicModal() {
-	if ( !micModal ) return;
-	populateMicSelect();
-	micModal.classList.remove( "hidden" );
-	setTimeout( () => micSelect?.focus(), 0 );
-}
-
-function hideMicModal() {
-	micModal?.classList.add( "hidden" );
-}
-
-if ( micSaveBtn ) {
-	micSaveBtn.addEventListener( "click", () => {
-		const value = micSelect.value || "";
-		audioDeviceId = value || null;
-		window.electron.setAudioDeviceId( value );
-		hideMicModal();
-	} );
-}
-
-if ( micCancelBtn ) {
-	micCancelBtn.addEventListener( "click", hideMicModal );
-}
-
-if ( micSelect ) {
-	micSelect.addEventListener( "keydown", ( e ) => {
-		if ( e.key === "Enter" ) micSaveBtn?.click();
-		else if ( e.key === "Escape" ) hideMicModal();
-	} );
-}
-
-if ( navigator.mediaDevices?.addEventListener ) {
-	navigator.mediaDevices.addEventListener( "devicechange", () => {
-		if ( micModal && !micModal.classList.contains( "hidden" ) ) {
-			populateMicSelect();
-		}
-	} );
-}
-
-window.electron.onMenuSelectMicrophone( showMicModal );
-window.electron.onAudioDeviceId( ( payload ) => {
-	audioDeviceId = payload?.deviceId || null;
-} );
-window.electron.getAudioDeviceId();

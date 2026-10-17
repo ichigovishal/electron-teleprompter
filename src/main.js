@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import path from "node:path";
 import fs from "node:fs/promises";
+import os from "node:os";
+import { spawn } from "node:child_process";
 import chokidar from "chokidar";
 import stateFactory from "./utils/state.js";
 import { convertMarkdown, readAndConvertMarkdown, readRawMarkdown } from "./utils/content.js";
@@ -17,9 +19,7 @@ const defaultConfig = {
 	opacity: 0.07,
 	mirrored: false,
 	recentFiles: [],
-	deepgramApiKey: null,
-	autoScrollSpeed: 1,
-	audioDeviceId: null
+	autoScrollSpeed: 1
 };
 
 const stateManager = stateFactory( defaultConfig );
@@ -29,14 +29,30 @@ let watcherPaused = false;
 let currentFontSize = defaultConfig.fontSize;
 let currentOpacity = defaultConfig.opacity;
 let currentMirrored = defaultConfig.mirrored;
-let currentDeepgramApiKey = null;
 let currentAutoScrollSpeed = defaultConfig.autoScrollSpeed;
-let currentAudioDeviceId = null;
 let recentFiles = [];
 let currentFilePath = null;
 let hasUnsavedChanges = false;
 let isClosing = false;
 let moduleOpenScriptFile = null;
+let moduleOpenScriptFileDialog = null;
+let sttProcess = null;
+
+function startSttDaemon() {
+	const pythonBin = process.env.STT_PYTHON || path.join( os.homedir(), "video-tools", "venv", "bin", "python" );
+	const daemonScript = path.join( __dirname, "stt-daemon.py" );
+	const args = [ daemonScript ];
+	if ( process.env.STT_DEVICE ) {
+		args.push( "--device", process.env.STT_DEVICE );
+	}
+	sttProcess = spawn( pythonBin, args, { stdio: [ "ignore", "pipe", "pipe" ] } );
+	sttProcess.stdout.on( "data", d => console.log( "[stt]", String( d ).trim() ) );
+	sttProcess.stderr.on( "data", d => console.error( "[stt]", String( d ).trim() ) );
+	sttProcess.on( "exit", ( code ) => {
+		console.log( `[stt] daemon exited (${ code })` );
+		sttProcess = null;
+	} );
+}
 
 function addRecentFile( filePath ) {
 	recentFiles = [ filePath, ...recentFiles.filter( f => f !== filePath ) ].slice( 0, MAX_RECENT_FILES );
@@ -55,9 +71,7 @@ const saveState = async ( win ) => {
 		opacity: currentOpacity,
 		mirrored: currentMirrored,
 		recentFiles,
-		deepgramApiKey: currentDeepgramApiKey,
-		autoScrollSpeed: currentAutoScrollSpeed,
-		audioDeviceId: currentAudioDeviceId
+		autoScrollSpeed: currentAutoScrollSpeed
 	} );
 };
 
@@ -76,11 +90,12 @@ const createWindow = ( state ) => {
 		frame: false
 	} );
 
-	win.webContents.session.setPermissionRequestHandler( ( _wc, permission, callback ) => {
-		callback( permission === "media" );
-	} );
-
 	win.loadFile( path.join( __dirname, "client", "teleprompter.html" ) );
+
+	win.webContents.on( "console-message", ( _event, details ) => {
+		const message = details && typeof details === "object" ? details.message : details;
+		console.log( "[renderer]", message );
+	} );
 
 	win.webContents.on( "did-finish-load", () => {
 		win.webContents.send( "fontSize", state.fontSize || defaultConfig.fontSize );
@@ -158,13 +173,28 @@ const createWindow = ( state ) => {
 			win.webContents.send( "content", md );
 			addRecentFile( scriptFile );
 			watchScriptFile( scriptFile );
-			buildMenus( win, openScriptFile, recentFiles );
+			buildMenus( win, openScriptFile, recentFiles, openScriptFileDialog );
 		}
 		return md;
 	}
 
+	async function openScriptFileDialog() {
+		const results = await dialog.showOpenDialog( win, {
+			properties: [ "openFile" ],
+			filters: [
+				{ name: "Markdown", extensions: [ "md", "txt" ] },
+				{ name: "All Files", extensions: [ "*" ] }
+			]
+		} );
+		if ( !results.canceled ) {
+			return openScriptFile( results.filePaths[0] );
+		}
+		return null;
+	}
+
 	moduleOpenScriptFile = openScriptFile;
-	buildMenus( win, openScriptFile, recentFiles );
+	moduleOpenScriptFileDialog = openScriptFileDialog;
+	buildMenus( win, openScriptFile, recentFiles, openScriptFileDialog );
 
 	return { win, openScriptFile };
 };
@@ -175,9 +205,15 @@ app.whenReady().then( async () => {
 	currentOpacity = state.opacity ?? defaultConfig.opacity;
 	currentMirrored = state.mirrored || false;
 	recentFiles = state.recentFiles || [];
-	currentDeepgramApiKey = state.deepgramApiKey || null;
 	currentAutoScrollSpeed = state.autoScrollSpeed ?? defaultConfig.autoScrollSpeed;
-	currentAudioDeviceId = state.audioDeviceId || null;
+
+	startSttDaemon();
+	app.on( "will-quit", () => {
+		if ( sttProcess ) {
+			sttProcess.kill();
+			sttProcess = null;
+		}
+	} );
 
 	ipcMain.on( "fontSize", ( _event, size ) => {
 		currentFontSize = size;
@@ -201,6 +237,12 @@ app.whenReady().then( async () => {
 
 	ipcMain.on( "resizeWindow", ( _event, width, height ) => {
 		win.setSize( width, height, false );
+	} );
+
+	ipcMain.on( "menuOpen", () => {
+		if ( moduleOpenScriptFileDialog ) {
+			moduleOpenScriptFileDialog();
+		}
 	} );
 
 	// Editor IPC handlers
@@ -227,7 +269,7 @@ app.whenReady().then( async () => {
 				currentFilePath = result.filePath;
 				hasUnsavedChanges = false;
 				addRecentFile( result.filePath );
-				buildMenus( win, moduleOpenScriptFile, recentFiles );
+				buildMenus( win, moduleOpenScriptFile, recentFiles, moduleOpenScriptFileDialog );
 				const md = await readAndConvertMarkdown( result.filePath );
 				win.webContents.send( "content", md );
 				win.webContents.send( "saveResult", true, result.filePath );
@@ -289,30 +331,6 @@ app.whenReady().then( async () => {
 		isClosing = true;
 		await saveState( win );
 		win.close();
-	} );
-
-	ipcMain.on( "getDeepgramKey", () => {
-		win.webContents.send( "deepgramKey", {
-			key: currentDeepgramApiKey,
-			error: currentDeepgramApiKey ? null : "No Deepgram API key saved."
-		} );
-	} );
-
-	ipcMain.on( "setDeepgramKey", async ( _event, key ) => {
-		const trimmed = typeof key === "string" ? key.trim() : "";
-		currentDeepgramApiKey = trimmed || null;
-		await saveState( win );
-		win.webContents.send( "deepgramKeySaved", { hasKey: !!currentDeepgramApiKey } );
-	} );
-
-	ipcMain.on( "getAudioDeviceId", () => {
-		win.webContents.send( "audioDeviceId", { deviceId: currentAudioDeviceId } );
-	} );
-
-	ipcMain.on( "setAudioDeviceId", async ( _event, deviceId ) => {
-		const value = typeof deviceId === "string" && deviceId ? deviceId : null;
-		currentAudioDeviceId = value;
-		await saveState( win );
 	} );
 
 	// Auto-load most recent file on startup

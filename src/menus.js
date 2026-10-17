@@ -1,7 +1,7 @@
-import { Menu, dialog } from "electron";
+import { Menu } from "electron";
 import path from "node:path";
 
-export function buildMenus( browserWindow, openScriptFile, recentFiles ) {
+export function buildMenus( browserWindow, openScriptFile, recentFiles, openFileDialog ) {
 	const isMac = process.platform === "darwin";
 
 	const recentSubmenu = recentFiles.map( filePath => ( {
@@ -15,7 +15,7 @@ export function buildMenus( browserWindow, openScriptFile, recentFiles ) {
 			label: "Clear Recent",
 			click: () => {
 				recentFiles.length = 0;
-				buildMenus( browserWindow, openScriptFile, recentFiles );
+				buildMenus( browserWindow, openScriptFile, recentFiles, openFileDialog );
 			}
 		} );
 	}
@@ -34,17 +34,9 @@ export function buildMenus( browserWindow, openScriptFile, recentFiles ) {
 				label: "Open",
 				accelerator: "CmdOrCtrl+O",
 				click: async () => {
-					const results = await dialog.showOpenDialog( browserWindow, {
-						properties: [ "openFile" ],
-						filters: [
-							{ name: "Markdown", extensions: [ "md", "txt" ] },
-							{ name: "All Files", extensions: [ "*" ] }
-						]
-					} );
-					if ( !results.canceled ) {
-						openScriptFile( results.filePaths[0] );
-					}
-				} },
+					await openFileDialog();
+				}
+			},
 			{
 				label: "Open Recent",
 				submenu: recentSubmenu.length > 0
@@ -118,15 +110,16 @@ export function buildMenus( browserWindow, openScriptFile, recentFiles ) {
 			},
 			{ type: "separator" },
 			{
-				label: "Select Microphone…",
+				label: "Set Auto-scroll Start Here",
+				accelerator: "CmdOrCtrl+Shift+K",
 				click: () => {
-					browserWindow.webContents.send( "menuSelectMicrophone" );
+					browserWindow.webContents.send( "menuSetAutoScrollStart" );
 				}
 			},
 			{
-				label: "Set Deepgram API Key…",
+				label: "Clear Auto-scroll Start",
 				click: () => {
-					browserWindow.webContents.send( "menuSetDeepgramKey" );
+					browserWindow.webContents.send( "menuClearAutoScrollStart" );
 				}
 			}
 		] },
